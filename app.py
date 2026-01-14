@@ -11,7 +11,7 @@ ASSET_NAMES = {
 }
 
 st.set_page_config(page_title="Volatility & Risk Dashboard", layout="wide")
-st.title("Emerging Markets Risk Dashboard")
+st.title("Volatility & Risk Dashboard")
 
 
 # Helper: Color regimes
@@ -31,7 +31,7 @@ ticker = st.sidebar.selectbox(
     ["EEM", "SPY", "BTC-USD"],
     index=0
 )
-
+st.caption(f"Asset: {ASSET_NAMES.get(ticker, ticker)}")
 
 # Run pipeline
 with st.spinner(f"Running risk pipeline for {ticker}..."):
