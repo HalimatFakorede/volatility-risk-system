@@ -1,11 +1,18 @@
 import streamlit as st
-import requests
 import pandas as pd
 
-API_URL = "http://127.0.0.1:8000"
+from src.pipeline import run_pipeline
+from src.outputs import latest_risk_snapshot
+
+ASSET_NAMES = {
+    "EEM": "Emerging Markets ETF (EEM)",
+    "SPY": "S&P 500 ETF (SPY)",
+    "BTC-USD": "Bitcoin (BTC-USD)",
+}
 
 st.set_page_config(page_title="Volatility & Risk Dashboard", layout="wide")
 st.title("Emerging Markets Risk Dashboard")
+
 
 # Helper: Color regimes
 def color_regime(val):
@@ -15,57 +22,138 @@ def color_regime(val):
         return "background-color: #ccffcc"   # light green
     return ""
 
+
+# Sidebar Controls
+st.sidebar.header("Controls")
+
+ticker = st.sidebar.selectbox(
+    "Choose Asset",
+    ["EEM", "SPY", "BTC-USD"],
+    index=0
+)
+
+
+# Run pipeline
+with st.spinner(f"Running risk pipeline for {ticker}..."):
+    df, alerts = run_pipeline(ticker=ticker)
+
+
+# DATE FILTERS
+
+df = df.copy()
+df["date"] = pd.to_datetime(df.index)
+df = df.reset_index(drop=True)
+
+if not alerts.empty:
+    alerts["date"] = pd.to_datetime(alerts["date"])
+
+st.sidebar.subheader("Date Filter")
+
+min_date = df["date"].min()
+max_date = df["date"].max()
+
+start_date, end_date = st.sidebar.date_input(
+    "Select date range",
+    value=(min_date, max_date),
+    min_value=min_date,
+    max_value=max_date
+)
+
+mask = (df["date"] >= pd.to_datetime(start_date)) & (df["date"] <= pd.to_datetime(end_date))
+df_filtered = df.loc[mask]
+
+if not alerts.empty:
+    alerts_filtered = alerts[
+        (alerts["date"] >= pd.to_datetime(start_date)) &
+        (alerts["date"] <= pd.to_datetime(end_date))
+    ]
+else:
+    alerts_filtered = alerts
+
+
 # Latest Risk Snapshot
+
 st.header("Latest Risk Snapshot")
 
-latest = requests.get(f"{API_URL}/risk/latest").json()
-latest_garch = requests.get(f"{API_URL}/risk/latest-garch").json()
+if df_filtered.empty:
+    st.warning("No data available for selected date range.")
+    st.stop()
+
+latest = latest_risk_snapshot(df_filtered)
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("Standard Volatility")
+    st.subheader("GARCH Volatility (ML)")
     st.metric("Date", latest["date"])
     st.metric("Volatility", round(latest["volatility"], 5))
     st.metric("Risk Level", latest["risk_level"])
     st.metric("Market Regime", latest["market_regime"])
-    st.metric("HMM Regime", latest["hmm_regime"])
+    if "hmm_regime" in latest:
+        st.metric("HMM Regime", latest["hmm_regime"])
 
 with col2:
-    st.subheader("GARCH Volatility")
-    st.metric("Date", latest_garch["date"])
-    st.metric("Volatility", round(latest_garch["volatility"], 5))
-    st.metric("Risk Level", latest_garch["risk_level"])
-    st.metric("Market Regime", latest_garch["market_regime"])
-    st.metric("HMM Regime", latest_garch["hmm_regime"])
+    st.subheader("System Info")
+    st.write("**Model:** GARCH(1,1)")
+    st.write(f"**Asset:** {ASSET_NAMES.get(ticker, ticker)}")
+    st.write("**Risk Engine:** Volatility-based classification")
+    st.write("**Regime Detection:** Rule-based + HMM")
+
 
 # Volatility History
+
 st.header("Volatility History")
 
-history = requests.get(f"{API_URL}/risk/history").json()
-df_hist = pd.DataFrame(history)
-df_hist["date"] = pd.to_datetime(df_hist["date"])
+df_hist = df_filtered.copy()
+
+# Flatten MultiIndex columns if they exist
+if isinstance(df_hist.columns, pd.MultiIndex):
+    df_hist.columns = df_hist.columns.get_level_values(0)
 
 st.line_chart(
-    df_hist.set_index("date")[["volatility", "garch_volatility"]]
+    df_hist.set_index("date")[["Volatility", "GARCH_Volatility"]]
 )
 
-# Market Regime Comparison (Colored)
+# Download history
+st.download_button(
+    label="Download Risk History (CSV)",
+    data=df_hist.to_csv(index=False),
+    file_name="risk_history.csv",
+    mime="text/csv"
+)
+
+
+# Market Regime Comparison
+
 st.header("Market Regime Comparison")
 
-regime_df = df_hist[["date", "market_regime", "hmm_regime"]].tail(20)
+regime_cols = ["date", "Market_Regime"]
+if "HMM_Regime" in df_hist.columns:
+    regime_cols.append("HMM_Regime")
+
+regime_df = df_hist[regime_cols].tail(20)
 
 styled_df = regime_df.style.applymap(
     color_regime,
-    subset=["market_regime", "hmm_regime"]
+    subset=[c for c in ["Market_Regime", "HMM_Regime"] if c in regime_df.columns]
 )
 
 st.dataframe(styled_df, use_container_width=True)
 
+
 # Risk Alerts Panel
+
 st.header("Risk Alerts")
 
-alerts = requests.get(f"{API_URL}/alerts").json()
-df_alerts = pd.DataFrame(alerts)
+if not alerts_filtered.empty:
+    st.dataframe(alerts_filtered, use_container_width=True)
 
-st.dataframe(df_alerts, use_container_width=True)
+    # Download alerts
+    st.download_button(
+        label="Download Alerts (CSV)",
+        data=alerts_filtered.to_csv(index=False),
+        file_name="risk_alerts.csv",
+        mime="text/csv"
+    )
+else:
+    st.success("No risk alerts triggered.")
