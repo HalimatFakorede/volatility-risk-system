@@ -33,10 +33,14 @@ ticker = st.sidebar.selectbox(
 )
 st.caption(f"Asset: {ASSET_NAMES.get(ticker, ticker)}")
 
-# Run pipeline
-with st.spinner(f"Running risk pipeline for {ticker}..."):
-    df, alerts = run_pipeline(ticker=ticker)
+# Run pipeline, cached so it does not refetch on every interaction
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def load_pipeline(ticker: str):
+    return run_pipeline(ticker=ticker)
 
+
+with st.spinner(f"Running risk pipeline for {ticker}..."):
+    df, alerts = load_pipeline(ticker)
 
 # DATE FILTERS
 
