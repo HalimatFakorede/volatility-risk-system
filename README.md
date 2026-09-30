@@ -1,60 +1,62 @@
-# Emerging Markets Volatility & Risk Signal System
+# Volatility Risk System
 
-## Overview
+A tool that watches how jumpy a market is and says whether it looks calm or stressed.
 
-This is a volatility and risk monitoring system for emerging markets. It helps investment teams, fintech platforms, and risk managers see when markets are stressed and decide how much to invest or reduce exposure.
+It does not predict prices. It tells you what the current conditions look like.
 
-The system does not predict prices. It focuses on risk levels and market regimes, showing when markets move from calm to stressed conditions.
+> **Note on scope:** this is a personal project built to learn volatility modelling. It uses free end of day data from Yahoo Finance. It is not financial advice and it has not been tested against real trading outcomes.
 
-It has three main parts:
+---
 
-1. **Data pipeline:** loads data and calculates volatility.
-2. **REST API:** provides risk signals to dashboards or other apps.
-3. **Streamlit dashboard:** shows risk signals, history, and alerts visually.
+## The question
 
-## Problem This Solves
+Big market drops usually come after volatility starts rising.
 
-Market drops are often preceded by rising volatility.
+So the question is simple:
 
-Many teams:
+> **Can you tell, from price movements alone, when a market has shifted from calm to stressed?**
 
-* React too late
-* Make subjective decisions
-* Have no standard risk signal
+---
 
-This system gives:
+## What it tracks
 
-* A quantitative volatility signal
-* Risk levels (Low, Medium, High)
-* Market regime labels (Calm, Stress)
-* Programmatic access through API endpoints
+Daily closing prices from Yahoo Finance. You pick the asset in the sidebar:
 
+| Ticker | What it is |
+|---|---|
+| **EEM** | iShares MSCI Emerging Markets ETF. This is the default, and the reason the project is framed around emerging markets. |
+| **SPY** | S&P 500 ETF, included as a developed market comparison. |
+| **BTC-USD** | Bitcoin, included because it is far more volatile than either, which makes the risk levels easy to see working. |
 
-## Who Uses This & Why
+Prices are pulled live each time the app loads, so the dashboard is always current.
 
-* Portfolio managers monitoring EM exposure
-* Fintech platforms offering investment products
-* Risk teams setting limits and alerts
+---
 
-It supports daily exposure and risk decisions, such as:
+## How it works
 
-* **Keep exposure the same:** when the market is calm
-* **Reduce positions:** when risk rises
-* **Tighten risk limits:** reduce leverage or be cautious
-* **Send alerts:** when risk levels or regimes change
+**1. Get the data.** Daily prices from Yahoo Finance, turned into daily returns.
 
-### How to Read the Signals
+**2. Measure how jumpy it is, two ways.**
 
-| Risk Level | Market Regime | Action                       |
-| ---------- | ------------- | ---------------------------- |
-| Low        | Calm          | Stay invested or increase    |
-| Medium     | Transition    | Reduce leverage, be cautious |
-| High       | Stress        | Reduce exposure, send alerts |
+- A rolling standard deviation. Simple, but slow to react.
+- A GARCH model. Reacts faster when something happens, because it treats today's volatility as partly carried over from yesterday.
 
+**3. Turn that into a risk level.** Low, Medium or High, based on where today sits compared with history.
 
-## Example Output
+**4. Label the market, also two ways.**
 
-```json
+- A plain rule: is volatility above a threshold or not?
+- A Hidden Markov Model, which looks at the whole sequence and can decide the market is in a stressed state even when today looks quiet.
+
+**5. Raise an alert** when the risk level changes, when volatility jumps against yesterday, or when the market label flips.
+
+**6. Serve it.** A FastAPI with five endpoints, and a Streamlit dashboard on top.
+
+---
+
+## Reading the output
+
+```
 {
   "date": "2026-01-12",
   "volatility": 0.0091,
@@ -64,153 +66,126 @@ It supports daily exposure and risk decisions, such as:
   "hmm_regime": "Stress"
 }
 ```
-**Meaning:** Volatility is low, so the market looks calm. However, the HMM model detects hidden stress in the background. This shows how the system compares simple rules with a machine learning model.
 
-## System Architecture
+Volatility is low today, so the simple rule says calm. But the Hidden Markov Model says stress.
 
-**Data → Pipeline → Risk Signals → API → Dashboard**
+**They disagree, and that is worth understanding.**
 
-1. Pull historical prices from Yahoo Finance.
-2. Compute daily returns.
-3. Compute rolling volatility (baseline).
-4. Compute GARCH volatility (reacts faster to shocks).
-5. Assign risk levels using volatility percentiles.
-6. Label market regimes:
-   * Rule-based: Calm or Stress
-   * HMM: detects hidden stress
-7. Generate alerts for:
-   * Risk level changes
-   * Volatility spikes vs previous day
-   * Regime transitions
-8. Provide results using FastAPI endpoints.
-9. Display everything in a Streamlit dashboard.
+The rule only looks at today. The Hidden Markov Model looks at the run of days leading up to now, so it can stay in a stressed state through a quiet day.
 
+When they disagree, the rule is describing right now and the HMM is suggesting the underlying state may have already shifted.
 
-## Key Features
+**What I have not done is check which one is right more often.** That is the main gap in this project and I have written it up below.
 
-* **Latest Risk Snapshot:** standard and GARCH volatility
-* **Volatility History Chart:** trends over time
-* **Market Regime Comparison:** rule-based vs HMM (green/red colouring)
-* **Smart Alerts Feed:** risk changes, volatility spikes, regime shifts
-* **REST API:** `/risk/latest`, `/risk/latest-garch`, `/risk/history`, `/alerts`
+---
 
-## Project Structure
+## The API
 
-```
-project-root/
-├── src/
-│   ├── api.py       
-│   ├── data_loader.py
-│   ├── features.py
-│   ├── risk_engine.py
-│   ├── regime.py
-│   ├── hmm_regime.py
-│   ├── signals.py      
-│   ├── outputs.py      
-│   ├── pipeline.py
-│   └── config.py
-│
-├── notebooks/
-│   └── data_exploration.ipynb
-│
-├── app.py              
-├── scripts/
-│   └── sanity_check.py
-├── README.md
-├── requirements.txt
-└── .gitignore
-```
+| Endpoint | What it gives you |
+|---|---|
+| `/risk/latest` | Today's risk signal from rolling volatility |
+| `/risk/latest-garch` | Today's risk signal from GARCH |
+| `/risk/history` | The last 250 days of volatility, risk levels and labels |
+| `/alerts` | Every point where the risk level or market label changed |
+| `/health` | Is the service up |
 
-## API Endpoints
+---
 
-* `/risk/latest` - latest standard volatility risk signal
-* `/risk/latest-garch` - latest GARCH volatility signal
-* `/risk/history` - last 250 days of volatility, risk levels, regimes
-* `/alerts` - points where risk levels or regimes changed
-* `/health` - simple health check
+## Screenshots
 
+### Dashboard
+![Dashboard](screenshots/dashboard.png)
 
-## Smart Alerts
+### Volatility over time
+![Volatility](screenshots/volatility_history.png)
 
-Alerts are generated when:
+### The two labelling methods side by side
+![Regime](screenshots/market_regime.png)
 
-* **Risk level changes** (Low → Medium → High)
-* **Volatility spikes** (compared to yesterday)
-* **Market regime changes** (Calm to Stress/Crisis)
+### Alerts
+![Alerts](screenshots/risk_alerts.png)
 
-**Example alert feed:**
+---
 
-| Date       | Volatility | Risk Level | Market Regime | Alert                      |
-| ---------- | ---------- | ---------- | ------------- | -------------------------- |
-| 2022-09-26 | 0.0117     | Medium     | Calm          | Risk changed: Low → Medium |
-| 2022-09-29 | 0.0125     | Low        | Calm          | Risk changed: Medium → Low |
+## What this cannot tell you
 
+I would rather write this myself than have you find it.
 
-## Limitations & Future Improvements
+**It has not been tested against real outcomes.** I never checked whether the alerts actually came before market drops. That is the biggest thing missing. I did do this properly in a later project, see below.
 
-* Uses end-of-day data only (no intraday signals)
-* Risk thresholds are percentile-based, not fully learned
-* Current regime logic is mostly rule-based
+**The risk thresholds are percentiles I chose**, not learned from data. Low, Medium and High are cut points, not findings.
 
-Future improvements could include:
+**End of day data only.** Nothing intraday, so a crash that happens and recovers inside one day is invisible.
 
-* HMM or Bayesian regime switching
-* Multi-asset or cross-market risk aggregation
-* Real-time cloud deployment
-* More use of GARCH volatility in regime detection
+**The regime logic is mostly rules.** The Hidden Markov Model is there for comparison, not as the main engine.
 
+**One market.** No cross market view, so it cannot see stress spreading from one place to another.
 
-## How to Run
+---
 
-1. Clone repo:
+## What I would do next
+
+1. **Test it.** Take every alert, look at what the market did over the following 5, 10 and 20 days, and compare against what happens on a random day. That single test would tell me whether any of this is useful.
+2. Learn the thresholds from data instead of picking percentiles.
+3. Add a second market and see whether stress in one shows up in the other.
+
+---
+
+## Where this led
+
+I built this to learn volatility modelling. I later took the same GARCH approach and applied it to Nigerian staple food prices, this time with proper testing:
+
+**[Nigeria Food Price Early Warning System](#)** <!-- paste the repo link here -->
+
+In that project I tested the signal the way I should have tested this one, only ever learning from the past and comparing against a base rate. If you want to see how I work now, look at that one.
+
+---
+
+## Running it yourself
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/HalimatFakorede/volatility-risk-system
 cd volatility-risk-system
-```
 
-2. Create and activate virtual environment:
-
-```bash
 python -m venv venv
-# Windows
-venv\Scripts\activate
-# macOS / Linux
-source venv/bin/activate
-```
+source venv/bin/activate        # Windows: venv\Scripts\activate
 
-3. Install dependencies:
-
-```bash
 pip install -r requirements.txt
 ```
 
-4. Start FastAPI server:
+Start the API:
 
 ```bash
 uvicorn src.api:app --reload
 ```
 
-5. Start Streamlit dashboard:
+Start the dashboard in a second terminal:
 
 ```bash
 streamlit run app.py
 ```
 
-## Screenshots
 
-### Dashboard Overview
-![Dashboard](screenshots/dashboard.png)
+---
 
-### Volatility History
-![Volatility](screenshots/volatility_history.png)
+## What is in here
 
-### Market Regime Comparison
-![Regime](screenshots/market_regime.png)
+```
+src/
+  api.py           the FastAPI endpoints
+  data_loader.py   pulls prices from Yahoo Finance
+  features.py      returns and rolling volatility
+  risk_engine.py   turns volatility into Low / Medium / High
+  regime.py        the rule based Calm / Stress label
+  hmm_regime.py    the Hidden Markov Model version
+  signals.py       alert logic
+  pipeline.py      runs everything in order
+  config.py        settings, including which asset is tracked
+app.py             the Streamlit dashboard
+notebooks/         exploration
+screenshots/       images used in this README
+```
 
-### Risk Alerts
-![Alerts](screenshots/risk_alerts.png)
+---
 
-## Disclaimer
-
-This project is for learning and portfolio purposes only. It is not financial advice.
+Built by [Halimat Fakorede](https://github.com/HalimatFakorede). For learning and portfolio purposes. Not financial advice.
